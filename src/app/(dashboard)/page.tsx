@@ -1,208 +1,175 @@
-
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Guardhouse } from "@/lib/mock-data";
-import { Users, Clock, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useFirebase } from "@/firebase/provider";
-import { collection, onSnapshot, query, orderBy, limit } from "firebase/firestore";
-import { cn, formatDate } from "@/lib/utils";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { format } from "date-fns";
+import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, getDoc } from "firebase/firestore";
+import { useToast } from "@/hooks/use-toast";
 
-export default function DashboardPage() {
-  const router = useRouter();
-  const { firestore, user, isUserLoading } = useFirebase();
+export default function ManagementPage() {
+  const { firestore, user } = useFirebase();
+  const { toast } = useToast();
   const [guardhouses, setGuardhouses] = useState<Guardhouse[]>([]);
-  const [rawHistory, setRawHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isUserLoading && !user) {
-      router.push("/login");
-    }
-  }, [user, isUserLoading, router]);
+  // Edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editCapacity, setEditCapacity] = useState("");
+  const [currentCrowd, setCurrentCrowd] = useState(0);
 
   useEffect(() => {
     if (!firestore || !user) return;
+    console.log("Setting up Firestore listeners...");
 
-    // Fetch guardhouses
-    const gq = query(collection(firestore, "guardhouses"));
-    const unsubscribeG = onSnapshot(gq, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id
-      })) as Guardhouse[];
-      setGuardhouses(data);
-    });
-
-    // Fetch historical data
-    const hq = query(
-      collection(firestore, "crowd_history"),
-      orderBy("timestamp", "desc"),
-      limit(50)
-    );
-    const unsubscribeH = onSnapshot(hq, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id
-      })).reverse(); // Oldest first for the chart
-      setRawHistory(data);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching historical data:", error);
-      setLoading(false);
-    });
-
-    return () => {
-      unsubscribeG();
-      unsubscribeH();
+    const checkAdmin = async () => {
+      try {
+        const snap = await getDoc(doc(firestore, "personnel", user.uid));
+        const role = snap.exists() ? snap.data().role : "none";
+        console.log("User role:", role);
+        setIsAdmin(role === "admin");
+      } catch (e) {
+        console.error("Admin check failed:", e);
+      }
     };
+    checkAdmin();
+
+    const unsubscribe = onSnapshot(
+      query(collection(firestore, "guardhouses")),
+      (snapshot) => {
+        console.log("Snapshot received, docs:", snapshot.docs.length);
+        const data = snapshot.docs.map(d => ({ ...d.data(), id: d.id })) as Guardhouse[];
+        setGuardhouses(data);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Snapshot error:", error);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
   }, [firestore, user]);
 
-  const historicalData = rawHistory.map(d => {
-    const gh = guardhouses.find(g => g.id === d.guardhouseId);
-    const date = formatDate(d.timestamp);
-    return {
-      time: format(date, 'HH:mm'),
-      crowd: d.crowdCount,
-      location: gh ? gh.name : 'Unknown',
-      fullTime: date.toLocaleString()
-    };
-  });
+  const handleEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firestore || !editingId) return;
+    console.log("handleEdit called, id:", editingId);
+    setIsEditing(true);
+    try {
+      console.log("Calling updateDoc...");
+      await updateDoc(doc(firestore, "guardhouses", editingId), {
+        name: editName,
+        location: editLocation,
+        capacity: parseInt(editCapacity),
+        currentCrowd: currentCrowd,
+        lastUpdated: new Date().toISOString(),
+      });
+      console.log("updateDoc success!");
+      toast({ title: "Updated!", description: `${editName} has been updated.` });
+      setEditingId(null);
+    } catch (error: any) {
+      console.error("updateDoc error:", error);
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      console.log("finally block, resetting isEditing");
+      setIsEditing(false);
+    }
+  };
 
-  if (isUserLoading || loading) {
-    return (
-      <div className="space-y-8 animate-pulse">
-        <div className="space-y-2">
-          <div className="h-8 w-64 bg-muted rounded" />
-          <div className="h-4 w-96 bg-muted rounded" />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-32 bg-muted rounded-xl" />
-          ))}
-        </div>
-        <div className="h-[400px] bg-muted rounded-xl" />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {[1, 2].map((i) => (
-            <div key={i} className="h-64 bg-muted rounded-xl" />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const handleDelete = async (id: string, name: string) => {
+    if (!firestore || !isAdmin) return;
+    if (!window.confirm(`Delete ${name}?`)) return;
+    console.log("handleDelete called, id:", id);
+    setIsDeleting(true);
+    try {
+      await deleteDoc(doc(firestore, "guardhouses", id));
+      console.log("deleteDoc success!");
+      toast({ title: "Deleted", description: `${name} removed.` });
+    } catch (error: any) {
+      console.error("deleteDoc error:", error);
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const openEdit = (gh: Guardhouse) => {
+    console.log("openEdit called for:", gh.name, "id:", gh.id);
+    setEditingId(gh.id);
+    setEditName(gh.name);
+    setEditLocation(gh.location);
+    setEditCapacity(gh.capacity.toString());
+    setCurrentCrowd(gh.currentCrowd ?? 0);
+  };
+
+  if (loading) return <div className="p-8"><Loader2 className="animate-spin" /></div>;
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h2 className="text-3xl font-headline font-bold text-foreground">Guardhouse Overview</h2>
-        <p className="text-muted-foreground mt-2">Real-time crowd monitoring across all locations.</p>
-      </div>
+    <div className="p-8 space-y-6">
+      <h2 className="text-2xl font-bold">Location Management</h2>
+      <p className="text-sm text-gray-500">Admin: {isAdmin ? "YES" : "NO"}</p>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card className="bg-card border-2 border-primary/10 shadow-lg relative overflow-hidden group hover:border-primary/30 transition-all duration-300">
-          <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-            <Users className="h-24 w-24" />
+      {/* Inline Edit Form */}
+      {editingId && (
+        <div className="border rounded p-4 bg-gray-50 space-y-3">
+          <h3 className="font-semibold">Editing Guardhouse</h3>
+          <form onSubmit={handleEdit} className="space-y-3">
+            <div>
+              <Label>Name</Label>
+              <Input value={editName} onChange={e => setEditName(e.target.value)} required />
+            </div>
+            <div>
+              <Label>Location</Label>
+              <Input value={editLocation} onChange={e => setEditLocation(e.target.value)} required />
+            </div>
+            <div>
+              <Label>Capacity</Label>
+              <Input type="number" value={editCapacity} onChange={e => setEditCapacity(e.target.value)} required />
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" disabled={isEditing}>
+                {isEditing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</> : "Save Changes"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setEditingId(null)} disabled={isEditing}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Guardhouse list */}
+      <div className="space-y-2">
+        {guardhouses.map(gh => (
+          <div key={gh.id} className="border rounded p-4 flex items-center justify-between bg-white">
+            <div>
+              <p className="font-medium">{gh.name}</p>
+              <p className="text-sm text-gray-500">
+                {gh.location} — Capacity: {gh.capacity} — Crowd: {gh.currentCrowd}
+              </p>
+            </div>
+            {isAdmin && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => openEdit(gh)}>
+                  Edit
+                </Button>
+                <Button size="sm" variant="destructive" disabled={isDeleting} onClick={() => handleDelete(gh.id, gh.name)}>
+                  Delete
+                </Button>
+              </div>
+            )}
           </div>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-sm uppercase font-bold tracking-wider text-primary">Average Crowd</CardDescription>
-            <CardTitle className="text-5xl font-bold tracking-tight">
-              {guardhouses.length > 0 
-                ? Math.round(guardhouses.reduce((acc, gh) => acc + gh.currentCrowd, 0) / guardhouses.length)
-                : 0}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm text-muted-foreground flex items-center gap-2 font-medium">
-              <Users className="h-4 w-4 text-primary" /> 
-              <span>Personnel currently waiting across locations</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-card border-2 border-primary/10 shadow-lg relative overflow-hidden group hover:border-primary/30 transition-all duration-300">
-          <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-            <Clock className="h-24 w-24" />
-          </div>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-sm uppercase font-bold tracking-wider text-primary">Est. Waiting Time</CardDescription>
-            <CardTitle className="text-5xl font-bold tracking-tight">
-              {(() => {
-                const total = guardhouses.reduce((acc, gh) => acc + gh.currentCrowd, 0);
-                const seconds = total * 8;
-                if (seconds < 60) return `${seconds}s`;
-                return `${Math.round(seconds / 60)}m`;
-              })()}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm text-muted-foreground flex items-center gap-2 font-medium">
-              <Clock className="h-4 w-4 text-primary" /> 
-              <span>Estimated processing time (8s/person)</span>
-            </div>
-          </CardContent>
-        </Card>
+        ))}
       </div>
-
-      <Card className="border-none shadow-md bg-card p-6">
-        <CardHeader className="px-0 pt-0">
-          <CardTitle className="text-xl font-bold">Crowd Trend Analysis</CardTitle>
-          <CardDescription>Real-time headcount fluctuations over time</CardDescription>
-        </CardHeader>
-        <CardContent className="px-0 h-[300px]">
-          {mounted ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={historicalData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorCrowd" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis 
-                  dataKey="time" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#888', fontSize: 12 }}
-                  dy={10}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#888', fontSize: 12 }}
-                />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                  labelStyle={{ fontWeight: 'bold', marginBottom: '4px' }}
-                />
-                <Area 
-                  type="monotone" 
-                  dataKey="crowd" 
-                  stroke="#3b82f6" 
-                  strokeWidth={3}
-                  fillOpacity={1} 
-                  fill="url(#colorCrowd)" 
-                  animationDuration={1500}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-muted/10 rounded-lg">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/30" />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
     </div>
   );
 }
