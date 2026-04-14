@@ -1,0 +1,141 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: guardhouses
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required, max 100)
+    //   - location: string (required, max 200)
+    //   - capacity: number (required, positive)
+    //   - currentCrowd: number (required, min 0)
+    //   - lastUpdated: string (required, ISO 8601)
+    //
+    // Collection: personnel
+    // Fields:
+    //   - id: string (required, matches UID)
+    //   - name: string (required, max 100)
+    //   - email: string (required, email format)
+    //   - role: string (required, 'admin' | 'officer')
+    //   - assignedGuardhouseIds: list (required, strings)
+    //
+    // Collection: crowd_history
+    // Fields:
+    //   - guardhouseId: string (required)
+    //   - timestamp: string (required, ISO 8601)
+    //   - crowdCount: number (required, min 0)
+    //   - submittedBy: string (optional, matches UID)
+    //   - createdAt: timestamp (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (
+          (exists(/databases/$(database)/documents/personnel/$(request.auth.uid)) && 
+           get(/databases/$(database)/documents/personnel/$(request.auth.uid)).data.role == 'admin') ||
+          (request.auth.token.email == "Tanzhuangjie012@gmail.com" && request.auth.token.email_verified == true)
+        );
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(data, allowedFields) {
+      return data.keys().hasOnly(allowedFields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidGuardhouse(data) {
+      return hasOnlyAllowedFields(data, ['name', 'location', 'capacity', 'currentCrowd', 'lastUpdated']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.location is string && data.location.size() > 0 && data.location.size() < 200 &&
+             data.capacity is number && data.capacity > 0 &&
+             data.currentCrowd is number && data.currentCrowd >= 0 &&
+             isValidDateString(data.lastUpdated);
+    }
+
+    function isValidPersonnel(data) {
+      return hasOnlyAllowedFields(data, ['id', 'name', 'email', 'role', 'assignedGuardhouseIds']) &&
+             data.id is string && data.id == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'officer'] &&
+             data.assignedGuardhouseIds is list;
+    }
+
+    function isValidCrowdData(data) {
+      return hasOnlyAllowedFields(data, ['guardhouseId', 'timestamp', 'crowdCount', 'submittedBy', 'createdAt']) &&
+             data.guardhouseId is string && data.guardhouseId.size() > 0 &&
+             isValidDateString(data.timestamp) &&
+             data.crowdCount is number && data.crowdCount >= 0 &&
+             (!('submittedBy' in data) || (data.submittedBy is string && data.submittedBy == request.auth.uid)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /guardhouses/{guardhouseId} {
+      allow read: if isAuthenticated();
+      // Allow updates to currentCrowd and lastUpdated for authenticated users (for seeding/reporting)
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentCrowd', 'lastUpdated']))
+      );
+      allow create: if isAuthenticated() && isValidGuardhouse(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /personnel/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Officers can only create their own profile with 'officer' role and empty assignments
+      // Admins can create anything
+      allow create: if isAuthenticated() && isOwner(userId) && isValidPersonnel(request.resource.data) &&
+                      (isAdmin() || (request.resource.data.role == 'officer' && request.resource.data.assignedGuardhouseIds.size() == 0));
+      
+      // Officers can only update their own name
+      // Admins can update anything
+      allow update: if isAuthenticated() && isOwner(userId) && isValidPersonnel(request.resource.data) &&
+                      (isAdmin() || (
+                        request.resource.data.role == resource.data.role &&
+                        request.resource.data.assignedGuardhouseIds == resource.data.assignedGuardhouseIds &&
+                        request.resource.data.email == resource.data.email
+                      ));
+      
+      allow delete: if isAdmin();
+    }
+
+    match /crowd_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidCrowdData(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+  }
+}

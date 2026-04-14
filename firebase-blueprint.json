@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "Guardhouse": {
+      "title": "Guardhouse",
+      "description": "Represents a physical guardhouse location.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique ID" },
+        "name": { "type": "string", "description": "Name of the guardhouse" },
+        "location": { "type": "string", "description": "Physical location description" },
+        "capacity": { "type": "number", "description": "Maximum capacity" },
+        "currentCrowd": { "type": "number", "description": "Current crowd count" },
+        "lastUpdated": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["id", "name", "location", "capacity", "currentCrowd", "lastUpdated"]
+    },
+    "Personnel": {
+      "title": "Personnel",
+      "description": "Authorized personnel details.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Firebase Auth UID" },
+        "name": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "format": "email", "description": "Email address" },
+        "role": { "type": "string", "enum": ["admin", "officer"], "description": "User role" },
+        "assignedGuardhouseIds": { "type": "array", "items": { "type": "string" }, "description": "IDs of guardhouses they can manage" }
+      },
+      "required": ["id", "name", "email", "role", "assignedGuardhouseIds"]
+    },
+    "CrowdData": {
+      "title": "CrowdData",
+      "description": "Historical crowd data entry.",
+      "type": "object",
+      "properties": {
+        "guardhouseId": { "type": "string", "description": "Reference to guardhouse" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When recorded" },
+        "crowdCount": { "type": "number", "description": "Observed count" },
+        "submittedBy": { "type": "string", "description": "UID of the submitter" }
+      },
+      "required": ["guardhouseId", "timestamp", "crowdCount", "submittedBy"]
+    }
+  },
+  "firestore": {
+    "/guardhouses/{guardhouseId}": {
+      "schema": "Guardhouse",
+      "description": "Guardhouse reference data."
+    },
+    "/personnel/{userId}": {
+      "schema": "Personnel",
+      "description": "User profiles and assignments."
+    },
+    "/crowd_history/{historyId}": {
+      "schema": "CrowdData",
+      "description": "Historical crowd records."
+    }
+  }
+}
